@@ -8,12 +8,20 @@ import (
 	"github.com/amaretur/auth-service/pkg/log"
 )
 
+type JwtService interface {
+	CreateTokens(ctx context.Context, uuid string) (*dto.Tokens, error)
+	RefreshTokens(ctx context.Context, tokens *dto.Tokens) (*dto.Tokens, error)
+}
+
 type Usecase struct {
+	jwt JwtService
+
 	logger log.Logger
 }
 
-func New(logger log.Logger) *Usecase {
+func New(jwt JwtService, logger log.Logger) *Usecase {
 	return &Usecase{
+		jwt: jwt,
 		logger: logger,
 	}
 }
@@ -23,9 +31,7 @@ func (u *Usecase) SignIn(
 	uuid string,
 ) (*dto.Tokens, error) {
 
-	u.logger.Info(uuid)
-
-	return nil, nil
+	return u.jwt.CreateTokens(ctx, uuid)
 }
 
 func (u *Usecase) Refresh(
@@ -33,7 +39,5 @@ func (u *Usecase) Refresh(
 	tokens *dto.Tokens,
 ) (*dto.Tokens, error) {
 
-	u.logger.Info(tokens)
-
-	return nil, nil
+	return u.jwt.RefreshTokens(ctx, tokens)
 }
