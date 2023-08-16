@@ -1,0 +1,10 @@
+[server]
+port = 8085
+max_header_bytes = 10	# MB
+read_timeout = 10		# сек.
+write_timeout = 10		# сек.
+
+[jwt]
+access_expire = 15		# мин.
+refresh_expire = 241920	# мин. (6 мес.)
+secret = "lkf@#IH9*H@#(f98uv9342201fnv-v)*()(cn9@*#"
