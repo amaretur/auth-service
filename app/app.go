@@ -8,6 +8,7 @@ import (
 	"github.com/amaretur/auth-service/internal/infrastructure/server"
 
 	http "github.com/amaretur/auth-service/internal/transport/http/handler"
+	"github.com/amaretur/auth-service/internal/usecase"
 )
 
 type App struct {
@@ -27,7 +28,24 @@ func NewApp(conf *config.Config, logger log.Logger) *App {
 }
 
 func (a *App) Init() error {
-	a.httpHandler = http.NewHandler("/api/v1")
+
+	authUsecase := usecase.New(
+		a.logger.WithFields(map[string]any{"layer": "usecase"}),
+	)
+
+	httpLogger := a.logger.WithFields(map[string]any{
+		"layer": "transport",
+		"protocol": "http",
+	})
+
+	authHandler := http.NewAuth(authUsecase, httpLogger)
+
+	handler := http.NewHandler("/api/v1")
+
+	handler.Register(authHandler, "")
+
+	a.httpHandler = handler
+
 	return nil
 }
 
