@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -57,7 +58,7 @@ func NewJwt(
 		method: jwt.GetSigningMethod("SHA512"),
 		secret: []byte(secret),
 
-		refreshLen: 10,
+		refreshLen: 26,
 		accessLabelInRefreshTokenLen: 6,
 
 		logger: logger.WithFields(map[string]any{
@@ -163,7 +164,16 @@ func (j *Jwt) createRefresh(
 
 func (j *Jwt) saveRefresh(ctx context.Context, token string) error {
 
-	if err := j.repo.Save(ctx, token, j.refreshExpire); err != nil {
+	hashedToken, err := j.hash(token)
+	if err != nil {
+		j.logger.WithFields(map[string]any{
+			"req_id": reqid.FromContext(ctx),
+		}).Errorf("hash refresh: %s", err)
+
+		return errors.Internal.New("save refresh").Wrap(err)
+	}
+
+	if err := j.repo.Save(ctx, hashedToken, j.refreshExpire); err != nil {
 
 		j.logger.WithFields(map[string]any{
 			"req_id": reqid.FromContext(ctx),
@@ -263,12 +273,21 @@ func (j *Jwt) validateRefreshToken(
 		return errors.InvalidToken.New("refresh token is invalid")
 	}
 
-	isExist, err := j.repo.IsExist(ctx, refresh)
+	hashedResresh, err := j.hash(refresh)
+	if err != nil {
+		j.logger.WithFields(map[string]any{
+			"req_id": reqid.FromContext(ctx),
+		}).Errorf("hash refresh: %s", err)
+
+		return errors.Internal.NewDefault().Wrap(err)
+	}
+
+	isExist, err := j.repo.IsExist(ctx, hashedResresh)
 	if err != nil {
 
 		j.logger.WithFields(map[string]any{
 			"req_id": reqid.FromContext(ctx),
-		}).Error(err)
+		}).Errorf("check of existence: %s", err)
 
 		return errors.Internal.NewDefault().Wrap(err)
 	}
@@ -278,6 +297,16 @@ func (j *Jwt) validateRefreshToken(
 	}
 
 	return nil
+}
+
+func (j *Jwt) hash(data string) (string, error) {
+	b, err := bcrypt.GenerateFromPassword([]byte(data), bcrypt.DefaultCost)
+
+	if err != nil {
+		return "", err
+	}
+
+	return string(b), nil
 }
 
 func (j *Jwt) expiresAt(duration time.Duration) *jwt.NumericDate {
