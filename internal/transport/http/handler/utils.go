@@ -10,7 +10,9 @@ import (
 	"github.com/amaretur/auth-service/pkg/log"
 )
 
-var defErrHttpMapper = map[uint32]int{}
+var defErrHttpMapper = map[uint32]int{
+	errors.InvalidToken.TypeId: http.StatusForbidden,
+}
 
 func errToHttpResp(err error, mapper map[uint32]int) (int, string) {
 

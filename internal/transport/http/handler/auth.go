@@ -39,16 +39,9 @@ func (a *Auth) Init(router *mux.Router) {
 
 func (a *Auth) Auth(w http.ResponseWriter, r *http.Request) {
 
-	var data struct {
-		Uuid string `json:"uuid"`
-	}
+	uuid := r.URL.Query().Get("uuid")
 
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		Error(w, http.StatusBadRequest, "invalid json structure")
-		return
-	}
-
-	if err := validator.ValidateUuid(data.Uuid); err != nil {
+	if err := validator.ValidateUuid(uuid); err != nil {
 		Error(w, http.StatusBadRequest, "invalid uuid")
 		return
 	}
@@ -56,7 +49,7 @@ func (a *Auth) Auth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5 * time.Second)
 	defer cancel()
 
-	tokens, err := a.usecase.SignIn(ctx, data.Uuid)
+	tokens, err := a.usecase.SignIn(ctx, uuid)
 	if err != nil {
 
 		code, msg := errToHttpResp(err, defErrHttpMapper)
