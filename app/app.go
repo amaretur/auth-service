@@ -32,6 +32,9 @@ func (a *App) Init() error {
 
 	// Создание сервисов
 	jwtService := service.NewJwt(
+		a.config.Jwt.AccessExpire,
+		a.config.Jwt.RefreshExpire,
+		a.config.Jwt.Secret,
 		a.logger.WithFields(map[string]any{"layer": "service"}),
 	)
 
