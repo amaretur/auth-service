@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 	"strings"
 	"path/filepath"
@@ -23,9 +24,38 @@ type Jwt struct {
 	Secret			string
 }
 
+// Конфигурация mongodb
+type MongoDB struct {
+	Protocol	string
+	Path		string
+	Params		string
+	Username	string
+	Password	string
+	OpenTimeout	time.Duration
+	Database	string
+}
+
+func (m MongoDB) ConnectURL() string {
+
+	url := fmt.Sprintf(
+		"%s://%s:%s@%s/",
+		m.Protocol,
+		m.Username,
+		m.Password,
+		m.Path,
+	)
+
+	if m.Params != "" {
+		url += fmt.Sprintf("?%s", m.Params)
+	}
+
+	return url
+}
+
 type Config struct {
 	Http	Http
 	Jwt		Jwt
+	MongoDB	MongoDB
 }
 
 func Init(path string) (*Config, error) {
@@ -54,6 +84,16 @@ func Init(path string) (*Config, error) {
 			AccessExpire: viper.GetDuration("jwt.access_expire"),
 			RefreshExpire: viper.GetDuration("jwt.refresh_expire"),
 			Secret: viper.GetString("jwt.secret"),
+		},
+
+		MongoDB: MongoDB{
+			Protocol: viper.GetString("mongodb.protocol"),
+			Path: viper.GetString("mongodb.path"),
+			Params: viper.GetString("mongodb.params"),
+			Username: viper.GetString("mongodb.username"),
+			Password: viper.GetString("mongodb.password"),
+			OpenTimeout: viper.GetDuration("mongodb.open_timeout"),
+			Database: viper.GetString("mongodb.database"),
 		},
 	}
 

@@ -7,4 +7,13 @@ write_timeout = 10		# сек.
 [jwt]
 access_expire = 15		# мин.
 refresh_expire = 241920	# мин. (6 мес.)
-secret = "lkf@#IH9*H@#(f98uv9342201fnv-v)*()(cn9@*#"
+secret = "liu@#IH9*H@#(f87uv9342201fnv-v)*()(cn9@^%"
+
+[mongodb]
+protocol = "mongodb"
+path = "localhost:27017"
+params = "retryWrites=true&w=majority"
+username = "username"
+password = "password"
+open_timeout = 10 # сек.
+database = "database"
