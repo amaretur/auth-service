@@ -8,4 +8,6 @@ var (
 	// Используется для обозначения непредвиденных ошибок,
 	// которые не должны появляться
 	Internal = errutil.NewType("internal error")
+
+	InvalidToken = errutil.NewType("parse token error")
 )
