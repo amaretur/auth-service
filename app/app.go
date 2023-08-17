@@ -17,6 +17,7 @@ import (
 	http "github.com/amaretur/auth-service/internal/transport/http/handler"
 	"github.com/amaretur/auth-service/internal/usecase"
 	"github.com/amaretur/auth-service/internal/service"
+	"github.com/amaretur/auth-service/internal/repository"
 )
 
 type App struct {
@@ -26,6 +27,8 @@ type App struct {
 	httpHandler	*http.Handler
 
 	httpServer	*server.Http
+
+	onClearFuncs []func()
 }
 
 func NewApp(conf *config.Config, logger log.Logger) *App {
@@ -39,8 +42,6 @@ func (a *App) Init() error {
 
 	// Установка соединения с mongodb
 	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
-
-	a.logger.Info(a.config.MongoDB.ConnectURL())
 
 	opts := options.
 		Client().
@@ -75,8 +76,30 @@ func (a *App) Init() error {
 		return err
 	}
 
+	// Закрытие соединения с mongodb
+	a.onClear(func() {
+
+		ctx, cancel := context.
+			WithTimeout(context.Background(), 20*time.Second)
+
+		defer cancel()
+
+		if err := client.Disconnect(ctx); err != nil {
+			a.logger.Errorf("close mongodb connect: %s", err)
+		}
+
+		a.logger.Info("connection to mongodb successfully closed")
+	})
+
+	// Создание репозитория
+	repo := repository.NewTokenRepositoryMongo(
+		client.Database(a.config.MongoDB.Database),
+		a.logger.WithFields(map[string]any{"layer": "repository"}),
+	)
+
 	// Создание сервисов
 	jwtService := service.NewJwt(
+		repo,
 		a.config.Jwt.AccessExpire,
 		a.config.Jwt.RefreshExpire,
 		a.config.Jwt.Secret,
@@ -144,7 +167,15 @@ func (a *App) Shutdown() {
 	a.clear()
 }
 
+func (a *App) onClear(f func()) {
+	a.onClearFuncs = append(a.onClearFuncs, f)
+}
+
 func (a *App) clear() {
+
+	for _, f := range a.onClearFuncs {
+		f()
+	}
 }
 
 
