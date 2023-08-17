@@ -43,11 +43,14 @@ type Jwt struct {
 }
 
 func NewJwt(
+	repo TokenRepository,
 	accessExpire, refreshExpire time.Duration,
 	secret string,
 	logger log.Logger,
 ) *Jwt {
 	return &Jwt{
+		repo: repo,
+
 		accessExpire: accessExpire,
 		refreshExpire: refreshExpire,
 
