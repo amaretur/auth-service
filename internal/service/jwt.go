@@ -23,7 +23,7 @@ type AccessClaims struct {
 
 type TokenRepository interface {
 	Save(ctx context.Context, token string, expire time.Duration) error
-	IsExist(ctx context.Context, token string) (bool, error)
+	Delete(ctx context.Context, token string) (int, error)
 }
 
 type Jwt struct {
@@ -282,7 +282,7 @@ func (j *Jwt) validateRefreshToken(
 		return errors.Internal.NewDefault().Wrap(err)
 	}
 
-	isExist, err := j.repo.IsExist(ctx, hashedResresh)
+	deletedCount, err := j.repo.Delete(ctx, hashedResresh)
 	if err != nil {
 
 		j.logger.WithFields(map[string]any{
@@ -292,7 +292,9 @@ func (j *Jwt) validateRefreshToken(
 		return errors.Internal.NewDefault().Wrap(err)
 	}
 
-	if !isExist {
+	// Если было удалено 0 документов - такого токена в базе нет
+	// Слудовательно - токен не валидный
+	if deletedCount == 0 {
 		return errors.InvalidToken.New("refresh token is invalid")
 	}
 
