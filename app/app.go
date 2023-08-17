@@ -1,6 +1,13 @@
 package app
 
 import (
+	"time"
+	"context"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+
 	"github.com/amaretur/auth-service/config"
 
 	"github.com/amaretur/auth-service/pkg/log"
@@ -29,6 +36,44 @@ func NewApp(conf *config.Config, logger log.Logger) *App {
 }
 
 func (a *App) Init() error {
+
+	// Установка соединения с mongodb
+	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+
+	a.logger.Info(a.config.MongoDB.ConnectURL())
+
+	opts := options.
+		Client().
+		ApplyURI(a.config.MongoDB.ConnectURL()).
+		SetServerAPIOptions(serverAPI)
+
+	ctx1, cancel1 := context.WithTimeout(
+		context.Background(),
+		a.config.MongoDB.OpenTimeout*time.Second,
+	)
+	defer cancel1()
+
+	client, err := mongo.Connect(ctx1, opts)
+
+	if err != nil {
+		a.logger.Errorf("connect to mongodb: %s", err)
+
+		return err
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel2()
+
+	err = client.
+		Database(a.config.MongoDB.Database).
+		RunCommand(ctx2, bson.D{{"ping", 1}}).
+		Err()
+
+	if err != nil {
+		a.logger.Errorf("ping mongodb connect: %s", err)
+
+		return err
+	}
 
 	// Создание сервисов
 	jwtService := service.NewJwt(
