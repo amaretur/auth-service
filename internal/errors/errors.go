@@ -10,4 +10,5 @@ var (
 	Internal = errutil.NewType("internal error")
 
 	InvalidToken = errutil.NewType("parse token error")
+	NotFound = errutil.NewType("not found")
 )
