@@ -14,16 +14,24 @@ import (
 
 	"github.com/amaretur/auth-service/pkg/log"
 	"github.com/amaretur/auth-service/pkg/reqid"
+	errutil "github.com/amaretur/auth-service/pkg/errors"
 )
 
 type AccessClaims struct {
 	*jwt.RegisteredClaims
-	Uuid string
+	Uuid		string	`json:"uuid"`
+	RefreshId	string	`json:"r_id"`
 }
 
 type TokenRepository interface {
-	Save(ctx context.Context, token string, expire time.Duration) error
-	Delete(ctx context.Context, token string) (int, error)
+	Save(
+		ctx context.Context,
+		token string,
+		expire time.Duration,
+	) (string, error)
+
+	GetById(ctx context.Context, id string) (string, error)
+	Delete(ctx context.Context, id string) error
 }
 
 type Jwt struct {
@@ -35,8 +43,7 @@ type Jwt struct {
 
 	secret []byte
 
-	refreshLen int // длина refresh токена без учета метки access токена
-	accessLabelInRefreshTokenLen int // длина метки access токена
+	refreshLen int // длина refresh токена
 
 	repo TokenRepository
 
@@ -55,11 +62,10 @@ func NewJwt(
 		accessExpire: accessExpire,
 		refreshExpire: refreshExpire,
 
-		method: jwt.GetSigningMethod("SHA512"),
+		method: jwt.GetSigningMethod("HS512"),
 		secret: []byte(secret),
 
-		refreshLen: 26,
-		accessLabelInRefreshTokenLen: 6,
+		refreshLen: 32,
 
 		logger: logger.WithFields(map[string]any{
 			"unit": "jwt",
@@ -79,12 +85,12 @@ func (j *Jwt) RefreshTokens(
 	tokens *dto.Tokens,
 ) (*dto.Tokens, error) {
 
-	uuid, _, err := j.parseAccess(ctx, tokens.Access)
+	uuid, refreshId, _, err := j.parseAccess(ctx, tokens.Access)
 	if err != nil {
 		return nil, errors.InvalidToken.New("invalid access token").Wrap(err)
 	}
 
-	err = j.validateRefreshToken(ctx, tokens.Access, tokens.Refresh)
+	err = j.validateRefreshToken(ctx, tokens.Refresh, refreshId)
 	if err != nil {
 		return nil, errors.InvalidToken.New("invalid refresh token").Wrap(err)
 	}
@@ -97,12 +103,12 @@ func (j *Jwt) createTokens(
 	uuid string,
 ) (*dto.Tokens, error) {
 
-	access, err := j.createAccess(ctx, uuid)
+	refresh, refreshId, err := j.createRefresh(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	refresh, err := j.createRefresh(ctx, access)
+	access, err := j.createAccess(ctx, uuid, refreshId)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +119,11 @@ func (j *Jwt) createTokens(
 	}, nil
 }
 
-func (j *Jwt) createAccess(ctx context.Context, uuid string) (string, error) {
+func (j *Jwt) createAccess(
+	ctx context.Context,
+	uuid string,
+	refreshId string,
+) (string, error) {
 
 	token := jwt.New(j.method)
 
@@ -122,6 +132,7 @@ func (j *Jwt) createAccess(ctx context.Context, uuid string) (string, error) {
 			ExpiresAt: j.expiresAt(j.accessExpire),
 		},
 		Uuid: uuid,
+		RefreshId: refreshId,
 	}
 
 	result, err := token.SignedString(j.secret)
@@ -137,32 +148,28 @@ func (j *Jwt) createAccess(ctx context.Context, uuid string) (string, error) {
 	return result, nil
 }
 
-// Функция создания refresh токена
-// refresh токен имеет вид:
-// "random base64 str" + "n-е количество символов взятое с конца access токена"
-func (j *Jwt) createRefresh(
-	ctx context.Context,
-	access string,
-) (string, error) {
+func (j *Jwt) createRefresh(ctx context.Context) (string, string, error) {
 
 	// Генерируем случайный токен
-	base, err := j.generateRandomToken(ctx, j.refreshLen)
+	token, err := j.generateRandomToken(ctx, j.refreshLen)
 	if err != nil {
-		return "", errors.Internal.New("generate random token").Wrap(err)
+		return "", "", errors.Internal.New("generate random token").Wrap(err)
 	}
-
-	// Добавляем к нему фрагмент access токена для связки
-	token := base + access[len(access) - j.accessLabelInRefreshTokenLen:]
 
 	// Сохраняем токен в базу
-	if err := j.saveRefresh(ctx, token); err != nil {
-		return "", err
+	refreshId, err := j.saveRefresh(ctx, token)
+	if err != nil {
+		j.logger.WithFields(map[string]any{
+			"req_id": reqid.FromContext(ctx),
+		}).Errorf("save refresh: %s", err)
+
+		return "", "", errors.Internal.New("save refresh").Wrap(err)
 	}
 
-	return token, nil
+	return token, refreshId, nil
 }
 
-func (j *Jwt) saveRefresh(ctx context.Context, token string) error {
+func (j *Jwt) saveRefresh(ctx context.Context, token string) (string, error) {
 
 	hashedToken, err := j.hash(token)
 	if err != nil {
@@ -170,24 +177,28 @@ func (j *Jwt) saveRefresh(ctx context.Context, token string) error {
 			"req_id": reqid.FromContext(ctx),
 		}).Errorf("hash refresh: %s", err)
 
-		return errors.Internal.New("save refresh").Wrap(err)
+		return "", errors.Internal.New("hash refresh").Wrap(err)
 	}
 
-	if err := j.repo.Save(ctx, hashedToken, j.refreshExpire); err != nil {
+	refreshId, err := j.repo.Save(ctx, hashedToken, j.refreshExpire)
+	if err != nil {
 
 		j.logger.WithFields(map[string]any{
 			"req_id": reqid.FromContext(ctx),
 		}).Errorf("save refresh: %s", err)
 
-		return errors.Internal.New("save refresh").Wrap(err)
+		return "", errors.Internal.New("save refresh").Wrap(err)
 	}
 
-	return nil
+	return refreshId, nil
 }
 
 // Генерирует рандомный токен указанного размера
 // (используется для формирования refresh токена)
-func (j *Jwt) generateRandomToken(ctx context.Context, length int) (string, error) {
+func (j *Jwt) generateRandomToken(
+	ctx context.Context,
+	length int,
+) (string, error) {
 
 	b := make([]byte, length)
 
@@ -207,16 +218,18 @@ func (j *Jwt) generateRandomToken(ctx context.Context, length int) (string, erro
 func (j *Jwt) parseAccess(
 	ctx context.Context,
 	token string,
-) (string, bool, error) {
+) (string, string, bool, error) {
 
-	claims, isValid, err := j.parseClaims(ctx, token, &AccessClaims{})
+	var isExpired bool = false
+
+	claims, isExpired, err := j.parseClaims(ctx, token, &AccessClaims{})
 	if err != nil {
 
 		j.logger.WithFields(map[string]any{
 			"req_id": reqid.FromContext(ctx),
 		}).Warnf("parse: %s", err.Error())
 
-		return "", false, err
+		return "", "", false, err
 	}
 
 	accessClaims, ok := claims.(*AccessClaims)
@@ -226,10 +239,10 @@ func (j *Jwt) parseAccess(
 			"req_id": reqid.FromContext(ctx),
 		}).Warnf("parse claims error")
 
-		return "", false, errors.InvalidToken.New("invalid token type")
+		return "", "", false, errors.InvalidToken.New("invalid token type")
 	}
 
-	return accessClaims.Uuid, isValid, nil
+	return accessClaims.Uuid, accessClaims.RefreshId, isExpired, nil
 }
 
 func (j *Jwt) parseClaims(
@@ -248,6 +261,10 @@ func (j *Jwt) parseClaims(
 
 	if err != nil {
 
+		if errutil.Is(err, jwt.ErrTokenExpired) {
+			return parsedToken.Claims, true, nil
+		}
+
 		j.logger.WithFields(map[string]any{
 			"req_id": reqid.FromContext(ctx),
 		}).Warnf("parse: %s", err)
@@ -255,50 +272,43 @@ func (j *Jwt) parseClaims(
 		return nil, false, errors.InvalidToken.New("invalid token").Wrap(err)
 	}
 
-	return parsedToken.Claims, parsedToken.Valid, nil
+	return parsedToken.Claims, false, nil
 }
 
 // Функция валидации refresh токена
-// (подразумевается, что подлинность access токена уже подтверждена)
 func (j *Jwt) validateRefreshToken(
 	ctx context.Context,
-	access string,
 	refresh string,
+	refreshId string,
 ) error {
 
-	accessLable := access[len(access) - j.accessLabelInRefreshTokenLen:]
-	refreshLable := refresh[len(refresh) - j.accessLabelInRefreshTokenLen:]
-
-	if accessLable != refreshLable {
-		return errors.InvalidToken.New("refresh token is invalid")
-	}
-
-	hashedResresh, err := j.hash(refresh)
+	// Получаем хеш токена по id
+	hashedRefresh, err := j.repo.GetById(ctx, refreshId)
 	if err != nil {
-		j.logger.WithFields(map[string]any{
+
+		logger := j.logger.WithFields(map[string]any{
 			"req_id": reqid.FromContext(ctx),
-		}).Errorf("hash refresh: %s", err)
+			"refresh_id": refreshId,
+		})
+
+		if errutil.Has(err, errors.NotFound) {
+			logger.Warn("token not found")
+
+			return errors.InvalidToken.NewDefault().Wrap(err)
+		}
+
+		logger.Error("get token error")
 
 		return errors.Internal.NewDefault().Wrap(err)
 	}
 
-	deletedCount, err := j.repo.Delete(ctx, hashedResresh)
-	if err != nil {
-
-		j.logger.WithFields(map[string]any{
-			"req_id": reqid.FromContext(ctx),
-		}).Errorf("check of existence: %s", err)
-
-		return errors.Internal.NewDefault().Wrap(err)
+	// Сравниваем хеш с токеном
+	if err := j.hashCompare(hashedRefresh, refresh); err != nil {
+		return errors.InvalidToken.NewDefault().Wrap(err)
 	}
 
-	// Если было удалено 0 документов - такого токена в базе нет
-	// Слудовательно - токен не валидный
-	if deletedCount == 0 {
-		return errors.InvalidToken.New("refresh token is invalid")
-	}
-
-	return nil
+	// Удаляем токен из БД
+	return j.repo.Delete(ctx, refreshId)
 }
 
 func (j *Jwt) hash(data string) (string, error) {
@@ -309,6 +319,10 @@ func (j *Jwt) hash(data string) (string, error) {
 	}
 
 	return string(b), nil
+}
+
+func (j *Jwt) hashCompare(hashedData, data string) error {
+	return bcrypt.CompareHashAndPassword([]byte(hashedData), []byte(data))
 }
 
 func (j *Jwt) expiresAt(duration time.Duration) *jwt.NumericDate {

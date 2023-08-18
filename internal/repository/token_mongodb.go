@@ -4,8 +4,9 @@ import (
 	"time"
 	"context"
 
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/amaretur/auth-service/internal/errors"
 
@@ -41,40 +42,82 @@ func (t *TokenRepositoryMongo) Save(
 	ctx context.Context,
 	token string,
 	expire time.Duration,
-) error {
+) (string, error) {
 
 	document := TokenDocument{
 		Token: token,
 		ExpireAt: time.Now().Add(time.Minute * expire),
 	}
 
-	_, err := t.collection.InsertOne(ctx, document)
+	res, err := t.collection.InsertOne(ctx, document)
 	if err != nil {
 		t.logger.WithFields(map[string]any{
 			"req_id": reqid.FromContext(ctx),
 		}).Errorf("insert token: %s", err)
 
-		return errors.Internal.New("repository internal").Wrap(err)
+		return "", errors.Internal.New("repository internal").Wrap(err)
 	}
 
-	return nil
+	return res.InsertedID.(primitive.ObjectID).Hex(), nil
+}
+
+func (t *TokenRepositoryMongo) GetById(
+	ctx context.Context,
+	id string,
+) (string, error) {
+
+	objectId, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return "", errors.Internal.New("invalid object id").Wrap(err)
+	}
+
+	filter := bson.M{"_id": objectId}
+
+	var data struct {
+		Token	string	`bson:"token"`
+	}
+
+	if err := t.collection.FindOne(ctx, filter).Decode(&data); err != nil {
+
+		logger := t.logger.WithFields(map[string]any{
+			"req_id": reqid.FromContext(ctx),
+			"_id": id,
+		})
+
+		if err == mongo.ErrNoDocuments {
+			logger.Warn(err)
+
+			return "", errors.NotFound.New("token not found").Wrap(err)
+		}
+
+		logger.Error(err)
+
+		return "", errors.Internal.NewDefault().Wrap(err)
+	}
+
+	return data.Token, nil
 }
 
 func (t *TokenRepositoryMongo) Delete(
 	ctx context.Context,
-	token string,
-) (int, error) {
+	id string,
+) error {
 
-	filter := bson.D{{"token", token}}
+	objectId, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return errors.Internal.New("invalid object id").Wrap(err)
+	}
 
-	deleteResult, err := t.collection.DeleteOne(ctx, filter)
+	deleteResult, err := t.collection.DeleteOne(ctx, bson.M{"_id": objectId})
 	if err != nil {
 		t.logger.WithFields(map[string]any{
 			"req_id": reqid.FromContext(ctx),
 		}).Error(err)
 
-		return 0, errors.Internal.New("internal repository").Wrap(err)
+		return errors.Internal.New("internal repository").Wrap(err)
 	}
 
-	return int(deleteResult.DeletedCount), nil
+	t.logger.Infof("deleted count: %s", deleteResult.DeletedCount)
+
+	return nil
 }
